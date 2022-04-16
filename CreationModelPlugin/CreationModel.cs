@@ -1,5 +1,6 @@
 ﻿using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
+using Autodesk.Revit.DB.Structure;
 using Autodesk.Revit.UI;
 using System;
 using System.Collections.Generic;
@@ -25,12 +26,17 @@ namespace CreationModelPlugin
                 .FirstOrDefault();
 
             Wall wall = null;
-            Wall walls = CreateWalls(doc, level1, level2, wall);
+            List<Wall> walls = new List<Wall>();
+            CreateWalls(doc, level1, level2, wall, walls);
+            AddDoor(doc, level1, walls[0]);
+            AddWindow(doc, level1, walls[1]);
+            AddWindow(doc, level1, walls[2]);
+            AddWindow(doc, level1, walls[3]);
 
             return Result.Succeeded;
         }
 
-         public List<Level> ListLevel(Document doc)
+        public List<Level> ListLevel(Document doc)
         {
             List<Level> listLevel = new FilteredElementCollector(doc) //создаем список уровней
                 .OfClass(typeof(Level))
@@ -39,7 +45,7 @@ namespace CreationModelPlugin
             return listLevel;
         }
 
-        public Wall CreateWalls(Document doc, Level level1, Level level2, Wall wall)
+        public Wall CreateWalls(Document doc, Level level1, Level level2, Wall wall, List<Wall> walls)
         {
             double width = UnitUtils.ConvertToInternalUnits(10000, UnitTypeId.Millimeters);  //ширина здания
             double depth = UnitUtils.ConvertToInternalUnits(5000, UnitTypeId.Millimeters);   //глубина здания
@@ -53,8 +59,7 @@ namespace CreationModelPlugin
             points.Add(new XYZ(-dx, dy, 0));
             points.Add(new XYZ(-dx, -dy, 0));  //замыкаем координаты на первую точку
 
-            List<Wall> walls = new List<Wall>();
-            //Wall wall = new Wall();
+            //List<Wall> walls = new List<Wall>();
 
             Transaction transaction = new Transaction(doc, "Построение стен");
             transaction.Start();
@@ -67,6 +72,56 @@ namespace CreationModelPlugin
             }
             transaction.Commit();
             return wall;
+        }
+
+        private void AddDoor(Document doc, Level level1, Wall wall)
+        {
+            FamilySymbol doorType = new FilteredElementCollector(doc)
+                .OfClass(typeof(FamilySymbol))
+                .OfCategory(BuiltInCategory.OST_Doors)
+                .OfType<FamilySymbol>()
+                .Where(x => x.Name.Equals("0915 x 2134 мм"))
+                .Where(x => x.FamilyName.Equals("Одиночные-Щитовые"))
+                .FirstOrDefault();
+
+            Transaction transaction = new Transaction(doc, "Построение дверей");
+            transaction.Start();
+            LocationCurve hostCurve = wall.Location as LocationCurve;  //определение линии стены
+            XYZ point1 = hostCurve.Curve.GetEndPoint(0);
+            XYZ point2 = hostCurve.Curve.GetEndPoint(1);
+            XYZ point = (point1 + point2) / 2;
+
+            if (!doorType.IsActive)
+                doorType.Activate();
+
+            doc.Create.NewFamilyInstance(point, doorType, wall, level1, StructuralType.NonStructural);
+            transaction.Commit();
+        }
+
+        private void AddWindow(Document doc, Level level1, Wall wall)
+        {
+            FamilySymbol windowType = new FilteredElementCollector(doc)
+                .OfClass(typeof(FamilySymbol))
+                .OfCategory(BuiltInCategory.OST_Windows)
+                .OfType<FamilySymbol>()
+                .Where(x => x.Name.Equals("0406 x 1220 мм"))
+                .Where(x => x.FamilyName.Equals("Фиксированные"))
+                .FirstOrDefault();
+
+            Transaction transaction = new Transaction(doc, "Построение окон");
+            transaction.Start();
+            LocationCurve hostCurve = wall.Location as LocationCurve;  //определение линии стены
+            XYZ point1 = hostCurve.Curve.GetEndPoint(0);
+            XYZ point2 = hostCurve.Curve.GetEndPoint(1);
+            XYZ point = (point1 + point2) / 2;
+            double z = UnitUtils.ConvertToInternalUnits(800, UnitTypeId.Millimeters);
+            XYZ location = new XYZ(point.X, point.Y, z);
+
+            if (!windowType.IsActive)
+                windowType.Activate();
+
+            doc.Create.NewFamilyInstance(location, windowType, wall, level1, StructuralType.NonStructural);
+            transaction.Commit();
         }
     }
 }
