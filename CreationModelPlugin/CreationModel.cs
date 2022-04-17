@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using Autodesk.Revit.ApplicationServices;
 
 namespace CreationModelPlugin
 {
@@ -32,6 +33,8 @@ namespace CreationModelPlugin
             AddWindow(doc, level1, walls[1]);
             AddWindow(doc, level1, walls[2]);
             AddWindow(doc, level1, walls[3]);
+            //AddFootPrintRoof(doc, level2, walls);
+            AddExtrusionRoof(doc, level2, walls);
 
             return Result.Succeeded;
         }
@@ -121,6 +124,93 @@ namespace CreationModelPlugin
                 windowType.Activate();
 
             doc.Create.NewFamilyInstance(location, windowType, wall, level1, StructuralType.NonStructural);
+            transaction.Commit();
+        }
+
+        private void AddFootPrintRoof(Document doc, Level level2, List<Wall> walls) //Построение крыши по контуру
+        {
+            RoofType roofType = new FilteredElementCollector(doc)
+                .OfClass(typeof(RoofType))
+                .OfType<RoofType>()
+                .Where(x => x.Name.Equals("Типовой - 400мм"))
+                .Where(x => x.FamilyName.Equals("Базовая крыша"))
+                .FirstOrDefault();
+
+            double wallWidth = walls[0].Width;
+            double dt = wallWidth / 2;  //задаем смещение контура
+            List<XYZ> points = new List<XYZ>();
+            points.Add(new XYZ(-dt, -dt, 0)); 
+            points.Add(new XYZ(dt, -dt, 0));
+            points.Add(new XYZ(dt, dt, 0));
+            points.Add(new XYZ(-dt, dt, 0));
+            points.Add(new XYZ(-dt, -dt, 0));
+
+            Application application = doc.Application;
+            CurveArray footprint = application.Create.NewCurveArray(); //границы плана дома
+            for (int i = 0; i < 4; i++)
+            {
+                LocationCurve curve = walls[i].Location as LocationCurve; //получаем отрезок основы центра стены
+                //footprint.Append(curve.Curve); //добавляем отрезок 
+                XYZ p1 = curve.Curve.GetEndPoint(0);
+                XYZ p2 = curve.Curve.GetEndPoint(1);
+                Line line = Line.CreateBound(p1 + points[i], p2 + points[i + 1]); //создаем контур с учетом смещения
+                footprint.Append(line);
+            }
+            Transaction transaction = new Transaction(doc, "Построение крыши по контуру");
+            transaction.Start();
+            ModelCurveArray footPrintToModelCurveMapping = new ModelCurveArray();
+            FootPrintRoof footprintRoof = doc.Create.NewFootPrintRoof(footprint, level2, roofType, out footPrintToModelCurveMapping);
+            ModelCurveArrayIterator iterator = footPrintToModelCurveMapping.ForwardIterator();
+            iterator.Reset();
+            while (iterator.MoveNext())
+            {
+                ModelCurve modelCurve = iterator.Current as ModelCurve;
+                footprintRoof.set_DefinesSlope(modelCurve, true);
+                footprintRoof.set_SlopeAngle(modelCurve, 0.5);
+            }
+            foreach(ModelCurve m in footPrintToModelCurveMapping)
+            {
+                footprintRoof.set_DefinesSlope(m, true);
+                footprintRoof.set_SlopeAngle(m, 0.5);
+            }
+            transaction.Commit();
+        }
+
+        private void AddExtrusionRoof(Document doc, Level level2, List<Wall> walls)  //Построение крыши выдавливанием
+        {
+            RoofType roofType = new FilteredElementCollector(doc)
+                .OfClass(typeof(RoofType))
+                .OfType<RoofType>()
+                .Where(x => x.Name.Equals("Типовой - 400мм"))
+                .Where(x => x.FamilyName.Equals("Базовая крыша"))
+                .FirstOrDefault();
+            
+            double wallWidth = walls[0].Width;
+            double dt = wallWidth / 2;  //задаем смещение контура
+
+            double wallHeight = walls[0].get_Parameter(BuiltInParameter.WALL_USER_HEIGHT_PARAM).AsDouble();
+            double roofThickness = roofType.get_Parameter(BuiltInParameter.ROOF_ATTR_DEFAULT_THICKNESS_PARAM).AsDouble();
+
+            LocationCurve curve = walls[3].Location as LocationCurve; //получаем отрезок основы центра стены
+            XYZ p1 = new XYZ(curve.Curve.GetEndPoint(0).X , curve.Curve.GetEndPoint(0).Y + dt, wallHeight+ roofThickness);
+            XYZ p3 = new XYZ(curve.Curve.GetEndPoint(1).X, curve.Curve.GetEndPoint(1).Y - dt, wallHeight+ roofThickness);
+            double z = UnitUtils.ConvertToInternalUnits(800, UnitTypeId.Millimeters);
+            XYZ p2 = new XYZ((p1.X + p3.X) / 2, (p1.Y + p3.Y) / 2, wallHeight + roofThickness + z);
+
+            LocationCurve curveExtrusion = walls[0].Location as LocationCurve;
+            double extrusionStart = curveExtrusion.Curve.GetEndPoint(0).X- dt;
+            double extrusionEnd = curveExtrusion.Curve.GetEndPoint(1).X+ dt;
+
+            CurveArray curveArray = new CurveArray();
+            //curveArray.Append(Line.CreateBound(new XYZ(0, 0, 0), new XYZ(0, 20, 20)));
+            curveArray.Append(Line.CreateBound(p1, p2));
+            //curveArray.Append(Line.CreateBound(new XYZ(0, 20, 20), new XYZ(0, 40, 0)));
+            curveArray.Append(Line.CreateBound(p2, p3));
+
+            Transaction transaction = new Transaction(doc, "Построение крыши выдавливанием");
+            transaction.Start();
+            ReferencePlane plane = doc.Create.NewReferencePlane(new XYZ(0, 0, 0), new XYZ(0, 0, 20), new XYZ(0, 20, 0), doc.ActiveView);
+            doc.Create.NewExtrusionRoof(curveArray, plane, level2, roofType, extrusionStart, extrusionEnd);
             transaction.Commit();
         }
     }
